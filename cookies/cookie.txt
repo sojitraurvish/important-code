@@ -1,0 +1,336 @@
+import { ACCESS_TOKEN, FALSE, IS_USER_AUTHENTICATED, REFRESH_TOKEN } from '@/constants/cookies';
+import Cookies from 'js-cookie';
+import { GetServerSidePropsContext, NextApiResponse } from 'next';
+
+/*
+1. `name`: A string representing the name of the cookie.
+2. `value`: A string representing the value to be stored in the cookie.
+3. `options`: An optional parameter that allows you to specify additional options
+for the cookie, such as expiration date, domain, path, etc. */
+
+export function getCookieFromServer(name: string, req?: GetServerSidePropsContext['req'] ): string | null {
+  console.log("server side cookie");
+  if (!req || !req.headers || !req.headers.cookie) return null;
+
+  const cookie = req.headers.cookie;
+
+  const cookieObj = cookie.split(';').reduce((acc: { [key: string]: string }, item) => {
+    const [key, value] = item.split('=').map((newitem) => newitem.trim());
+    acc[key] = value;
+    return acc;
+  }, {});
+
+  return cookieObj[name] ? decodeURIComponent(cookieObj[name]) : null;
+}
+export function getCookieFromClient(name:string): string | null {
+  console.log("client side cookie1");
+  
+  if(typeof window === "undefined") return null;
+  console.log("client side cookie2");
+
+  const cookie = window.document.cookie;
+
+  const cookieObj = cookie.split(';').reduce((acc: { [key: string]: string }, item) => {
+    const [key, value] = item.split('=').map((newitem) => newitem.trim());
+    acc[key] = value;
+    return acc;
+  }, {});
+
+  return cookieObj[name] ? decodeURIComponent(cookieObj[name]) : null;
+}
+export function getCookie(name: string, req?: GetServerSidePropsContext['req']): string | null {
+  return typeof window !== 'undefined' ? getCookieFromClient(name) : getCookieFromServer(name, req) 
+}
+
+export const setCookieClient = (name: string, value: string, days:number=1) => {
+
+  if (typeof window === 'undefined') {
+    console.error('Cannot set cookie: window is not defined');
+    return;
+  }
+
+  let expires = "";
+  if (days) {
+    const date = new Date();
+    date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+    expires = "; expires=" + date.toUTCString();
+  }
+  document.cookie = name + "=" + (value || "") + expires + "; path=/";
+};
+export const setCookieServer = (res?: NextApiResponse, name: string, value: string, days: number=1) => {
+  
+  if (typeof window === 'undefined') {
+    console.error('Cannot set cookie: window is not defined');
+    return;
+  }
+
+  let expires = "";
+  if (days) {
+    const date = new Date();
+    date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+    expires = "; expires=" + date.toUTCString();
+  }
+  // res.setHeader('Set-Cookie', `${name}=${value};${expires};Path=/;HttpOnly;Secure`);
+  res.setHeader('Set-Cookie', `${name}=${value};${expires};Path=/`);
+};
+// export function setCookie(res:NextApiResponse,name: string, value: string, options?: Cookies.CookieAttributes) {
+export function setCookie(res:NextApiResponse,name: string, value: string) {
+  return typeof window !== 'undefined' ? setCookieClient(name,value) : setCookieServer(res,name,value)
+}
+
+// export function updateCookie(name: string, value: string, options?: Cookies.CookieAttributes) {
+//   Cookies.set(name, value, options);
+// }
+
+export const removeCookieClient = (name: string) => {
+  if (typeof window === 'undefined') {
+    console.error('Cannot remove cookie: window is not defined');
+    return;
+  }
+
+  const date = new Date(0); // January 1, 1970, 00:00:00 UTC
+  document.cookie = `${name}=; expires=${date.toUTCString()}; path=/`;
+};
+export const removeCookieServer = (res: NextApiResponse, name: string) => {
+  const date = new Date(0); // January 1, 1970, 00:00:00 UTC
+  res.setHeader('Set-Cookie', `${name}=; expires=${date.toUTCString()}; path=/; HttpOnly; Secure; SameSite=Strict`);
+};
+// export function removeCookie(name: string, options?: Cookies.CookieAttributes) {
+export function removeCookie(name: string,res?:NextApiResponse) {
+  return res ? removeCookieServer(res,name) : removeCookieClient(name)
+  // Cookies.remove(name,options);
+}
+
+export const clearCookies = () => {
+  removeCookie(ACCESS_TOKEN);
+  removeCookie(REFRESH_TOKEN);
+  // setCookie(IS_USER_AUTHENTICATED, FALSE);
+  // Cookies.remove(IS_USER_AUTHENTICATED);
+};
+
+
+1. Add a method which takes api url and throws is isErrorHandlingRequired(apiUrl)
+   this method should check for the domains and return true or false  
+   eg: if you send strapi url sent then we return false;
+   as we dont need to handle and return 500
+   or if you send le-offers.com it should return true
+2. isErrorHandlingRequired true && api fails with 401. call refresh token 
+3. 
+
+
+import { AUTH_URL_V2, BASE_API_URL, STRAPI_BASE_API_URL } from '@/config';
+import { REFRESH_TOKEN_URL } from './endpoints';
+import { getCookie, setCookie } from '@/utils/cookies';
+import { ACCESS_TOKEN, REFRESH_TOKEN } from '@/constants/cookies';
+import { GetServerSidePropsContext } from 'next';
+
+type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+interface Headers {
+  Authorization?: string;
+  'Content-Type'?: 'application/json';
+  lan?: 'en' | 'ar';
+  platform?: '';
+}
+
+const defaultHeaders: Headers = {
+  Authorization: getCookie(ACCESS_TOKEN) || '',
+  'Content-Type': 'application/json',
+  lan: 'en',
+};
+
+const getDefaultHeaders = (url: string, req?: GetServerSidePropsContext['req']): Headers | {} => {
+  // console.log('my token',getCookie(ACCESS_TOKEN,req));
+  return url.includes(STRAPI_BASE_API_URL!) ? {} : { ...defaultHeaders, Authorization: getCookie(ACCESS_TOKEN, req) };
+};
+
+pro.all[p1,p2,p3,p4,p5]
+
+let isGeneratingNewRefreshToken = false;
+let pausedApisQueue: Array<{ resolve: (value: string | null) => void; reject: (reason?: string | null) => void }> = [];
+
+const processQueue = (error: string | null, token: string | null = null): void => {
+  pausedApisQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  
+  pausedApisQueue = [];
+};
+
+export const fetchCall = async <T, B = {}>(
+  url: string,
+  httpMethod: HTTPMethod = 'GET',
+  req?: GetServerSidePropsContext['req'],
+  headers?: Headers,
+  body?: B
+): Promise<T> => {
+  try {
+    const response = await fetch(url, {
+      method: httpMethod,
+      headers: { ...getDefaultHeaders(url, req), ...headers }, // && conditional add the key ...
+      ...(body && { body: JSON.stringify(body) }),
+    });
+
+    if (response.status === 401) {
+      if (!isGeneratingNewRefreshToken) {
+        isGeneratingNewRefreshToken = true;
+
+        try {
+          const newToken = await refreshToken(req);
+          processQueue(null, newToken);
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred';
+          processQueue(errorMessage, null);
+          throw new Error(errorMessage);
+        } finally {
+          isGeneratingNewRefreshToken = false;
+        }
+      }
+
+      return new Promise<T>((resolve, reject) => {
+        pausedApisQueue.push({
+          resolve: async (newToken) => {
+            try {
+              const retryResponse = await fetch(url, {
+                method: httpMethod,
+                headers: { 
+                  ...getDefaultHeaders(url, req),
+                  ...headers,
+                  Authorization: `Bearer ${newToken}` 
+                }, // && conditional add the key ...
+                ...(body && { body: JSON.stringify(body)}),
+              });
+              resolve(await retryResponse.json());
+            } catch (err) {
+              const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred';
+              reject(errorMessage);
+            }
+          },
+          reject: (err) => {
+            reject(err);
+          },
+        });
+      });
+    }
+
+    if (!response.ok) {
+      console.error('HTTP error! status:', response.status, response.statusText);
+      const errorDetails = await response.text();
+      console.error('Response details:', errorDetails);
+      throw new Error(`HTTP error! status: ${response.status} ${response.statusText} - ${errorDetails}`);
+    }
+
+    return response.json();
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+    console.error('Fetch error:', errorMessage);
+    throw new Error(errorMessage);
+  }
+};
+
+type RefreshTokenResponse = {
+  message: string;
+  data: {
+    accessExpireAt: number;
+    accessToken: string;
+  };
+};
+
+export async function refreshToken(req?: GetServerSidePropsContext['req']): Promise<string> {
+  try {
+    console.log('refreshToken api called');
+
+    const refreshResponse = await fetch(
+      `
+      ${BASE_API_URL + AUTH_URL_V2 + REFRESH_TOKEN_URL}`,{
+        method:'POST',
+        headers:{ ...defaultHeaders},
+        body:JSON.stringify({
+          refreshToken: getCookie(REFRESH_TOKEN, req),
+          accessToken: getCookie(ACCESS_TOKEN, req),
+        })
+      }
+    );
+
+    console.log('refreshResponse', refreshResponse);
+    if (!refreshResponse.ok) {
+      throw new Error('Failed to refresh token');
+    }
+
+    const refreshData: RefreshTokenResponse = await refreshResponse.json();
+    console.log('refreshResponse data', refreshData);
+
+
+    // if (!refreshResponse.ok) {
+    //   clearCookies();
+    //   window.location.href = '/login'; // Redirect to login page
+    //   throw new Error('Failed to refresh token');
+    // }
+
+    // setCookie(ACCESS_TOKEN, refreshResponse.data.accessToken);
+    return refreshData.data.accessToken;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+    throw new Error(errorMessage);
+    // console.log('referesh error');
+
+    // return {
+    //   props: {
+    //     destination: '/500',
+    //     permanent: false,
+    //   },
+    // };
+  }
+}
+
+interface User {
+  id: number;
+  title: string;
+  price: number;
+  description: string;
+  image: string;
+  category: string;
+}
+
+export const aboutUs = async (req?: GetServerSidePropsContext['req']) => {
+  // console.log('called');
+  return await fetchCall<User>(
+    'https://apiv2.le-offers.com/v2/python/assets/?page=1&lat=12.95477&long=77.611453&limit=10',
+    'GET',
+    req
+  );
+};
+
+// interface User {
+//     id: number;
+//     name: string;
+//   }
+
+// interface NewUser {
+//     name: string;
+//     email: string;
+//   }
+
+//   const newUser: NewUser = {
+//     name: 'John Doe',
+//     email: 'john.doe@example.com',
+//   };
+
+//   const newUserConfigHeaders: Headers = {
+//     'Authorization': 'Bearer some-token',
+//   };
+
+//   (async () => {
+//     try {
+//       const user = await fetchCall<User>('https://api.example.com/users', 'POST', newUserConfigHeaders, newUser);
+//       console.log(user);
+//     } catch (error) {
+//       console.error(error);
+//     }
+//   })();
+
